@@ -46,12 +46,38 @@ export async function GET(request: Request) {
       FROM inclusiweb_geo.grid_cells
     `;
 
-    const resultSet = await client.query({
-      query,
-      format: 'JSONEachRow',
-    });
+    const startTime = performance.now();
+    let cells: any[] = [];
+    let isFallback = false;
 
-    const cells: any[] = await resultSet.json();
+    try {
+      const dbPromise = (async () => {
+        const resultSet = await client.query({
+          query,
+          format: 'JSONEachRow',
+        });
+        return await resultSet.json();
+      })();
+
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Query latency threshold exceeded (>250ms)')), 250)
+      );
+
+      cells = (await Promise.race([dbPromise, timeoutPromise])) as any[];
+    } catch (dbError: any) {
+      console.warn('ClickHouse unavailable or timed out. Switching seamlessly to cached JSON fixture:', dbError.message);
+      isFallback = true;
+
+      // Select closest fixture payload
+      let fixtureName = 'simulate_100.json';
+      if (rainfall > 210) fixtureName = 'simulate_250.json';
+      else if (rainfall > 135) fixtureName = 'simulate_175.json';
+
+      const fixtureData = require(`../../../lib/fixtures/${fixtureName}`);
+      cells = fixtureData.cells || [];
+    }
+
+    const latencyMs = Math.round(performance.now() - startTime);
 
     let redZoneArea = 0;
     let affectedPopulation = 0;
@@ -68,6 +94,9 @@ export async function GET(request: Request) {
 
     return NextResponse.json({
       success: true,
+      cached: isFallback,
+      db_status: isFallback ? 'LOCAL CACHE [STANDBY]' : 'ONLINE',
+      query_latency_ms: latencyMs,
       parameters: {
         rainfall,
         slopeThreshold,

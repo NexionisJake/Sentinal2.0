@@ -28,6 +28,7 @@ interface MapProps {
   hazards?: any;
   allocationPlan?: any;
   showAllocationVectors?: boolean;
+  externalViewState?: any;
 }
 
 export default function TacticalMap({
@@ -37,9 +38,12 @@ export default function TacticalMap({
   hazards,
   allocationPlan,
   showAllocationVectors = true,
+  externalViewState,
 }: MapProps) {
   const [dashOffset, setDashOffset] = useState<number>(0);
   const animRef = useRef<number | null>(null);
+
+  const viewStateToUse = externalViewState || undefined;
 
   // Smooth ant-path dash animation loop
   useEffect(() => {
@@ -189,7 +193,7 @@ export default function TacticalMap({
   return (
     <div className="relative w-full h-full bg-tactical-bg">
       <DeckGL
-        initialViewState={INITIAL_VIEW_STATE}
+        {...(viewStateToUse ? { viewState: viewStateToUse } : { initialViewState: INITIAL_VIEW_STATE })}
         controller={true}
         layers={layers}
         getTooltip={({ object }) => {

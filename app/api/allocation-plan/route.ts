@@ -28,52 +28,70 @@ export async function GET(request: Request) {
     const slopeThreshold = Math.min(30, Math.max(10, parseFloat(searchParams.get('slope_threshold') || '20')));
     const historyWeight = Math.min(1.0, Math.max(0.2, parseFloat(searchParams.get('history_weight') || '0.5')));
 
-    // 1. Query Safe Sites
-    const sitesRes = await client.query({
-      query: `SELECT * FROM inclusiweb_geo.safe_sites`,
-      format: 'JSONEachRow',
-    });
-    const rawSites: any[] = await sitesRes.json();
-    const sites: SafeSite[] = rawSites.map((s) => ({
+    const startTime = performance.now();
+    let isFallback = false;
+
+    try {
+      const fetchAllData = async () => {
+        const [sitesRes, habsRes, roadsRes, gridRes] = await Promise.all([
+          client.query({ query: `SELECT * FROM inclusiweb_geo.safe_sites`, format: 'JSONEachRow' }),
+          client.query({ query: `SELECT * FROM inclusiweb_geo.habitations`, format: 'JSONEachRow' }),
+          client.query({ query: `SELECT * FROM inclusiweb_geo.road_networks`, format: 'JSONEachRow' }),
+          client.query({
+            query: `
+              SELECT lat, lon,
+                least(100.0, greatest(0.0, 
+                  (if(slope >= ${slopeThreshold}, (slope / 45.0) * 35.0, (slope / 45.0) * 15.0) +
+                  (flow_accum * 25.0) +
+                  ((${rainfall} / 250.0) * 25.0) +
+                  (${historyWeight} * history_density * 25.0))
+                )) AS hazard_score
+              FROM inclusiweb_geo.grid_cells
+            `,
+            format: 'JSONEachRow',
+          }),
+        ]);
+
+        return {
+          rawSites: (await sitesRes.json()) as any[],
+          habitations: (await habsRes.json()) as any[],
+          roadNetworks: (await roadsRes.json()) as any[],
+          gridCells: (await gridRes.json()) as any[],
+        };
+      };
+
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Allocation query latency threshold exceeded (>250ms)')), 250)
+      );
+
+      const dbData: any = await Promise.race([fetchAllData(), timeoutPromise]);
+
+      var rawSites = dbData.rawSites;
+      var habitations = dbData.habitations;
+      var roadNetworks = dbData.roadNetworks;
+      var gridCells = dbData.gridCells;
+    } catch (dbErr: any) {
+      console.warn('ClickHouse unavailable or timed out for allocation plan. Switching to cached fixture:', dbErr.message);
+      isFallback = true;
+      const fixtureName = rainfall > 180 ? 'allocation_250.json' : 'allocation_100.json';
+      const fixture = require(`../../../lib/fixtures/${fixtureName}`);
+      return NextResponse.json({
+        ...fixture,
+        cached: true,
+        db_status: 'LOCAL CACHE [STANDBY]',
+        query_latency_ms: Math.round(performance.now() - startTime),
+      });
+    }
+
+    const sites: SafeSite[] = rawSites.map((s: any) => ({
       ...s,
       used_land: 0,
       used_water: 0,
       used_road: 0,
     }));
 
-    // 2. Query Habitations
-    const habsRes = await client.query({
-      query: `SELECT * FROM inclusiweb_geo.habitations`,
-      format: 'JSONEachRow',
-    });
-    const habitations: any[] = await habsRes.json();
-
-    // 3. Query Road Networks
-    const roadsRes = await client.query({
-      query: `SELECT * FROM inclusiweb_geo.road_networks`,
-      format: 'JSONEachRow',
-    });
-    const roadNetworks: any[] = await roadsRes.json();
-
-    // 4. Query Hazard Cells to calculate Hazard Score for each village
-    const gridRes = await client.query({
-      query: `
-        SELECT lat, lon,
-          least(100.0, greatest(0.0, 
-            (if(slope >= ${slopeThreshold}, (slope / 45.0) * 35.0, (slope / 45.0) * 15.0) +
-            (flow_accum * 25.0) +
-            ((${rainfall} / 250.0) * 25.0) +
-            (${historyWeight} * history_density * 25.0))
-          )) AS hazard_score
-        FROM inclusiweb_geo.grid_cells
-      `,
-      format: 'JSONEachRow',
-    });
-    const gridCells: any[] = await gridRes.json();
-
     // Attach Hazard_Score and Calculate Final_Priority
-    const evaluatedVillages = habitations.map((v) => {
-      // Find nearest grid cell score
+    const evaluatedVillages = habitations.map((v: any) => {
       let minDistance = Infinity;
       let nearestHazardScore = 40;
       for (const cell of gridCells) {
@@ -93,16 +111,16 @@ export async function GET(request: Request) {
 
       let tier = 'TIER_3';
       let tierName = 'Phase 3 (Medium-term, 12-24 mos)';
-      let color = '#EAB308'; // Gold
+      let color = '#EAB308';
 
       if (finalPriority >= 450 || nearestHazardScore >= 70) {
         tier = 'TIER_1';
         tierName = 'Phase 1 (Immediate, < 3 mos)';
-        color = '#EF4444'; // Crimson
+        color = '#EF4444';
       } else if (finalPriority >= 250 || nearestHazardScore >= 50) {
         tier = 'TIER_2';
         tierName = 'Phase 2 (Short-term, 3-12 mos)';
-        color = '#F59E0B'; // Amber
+        color = '#F59E0B';
       }
 
       return {
@@ -116,14 +134,11 @@ export async function GET(request: Request) {
       };
     });
 
-    // Sort by Final_Priority Descending for Capacity Allocation
-    evaluatedVillages.sort((a, b) => b.final_priority - a.final_priority);
+    evaluatedVillages.sort((a: any, b: any) => b.final_priority - a.final_priority);
 
     const allocations: any[] = [];
 
-    // 5. Constrained Capacity Matching
-    evaluatedVillages.forEach((village) => {
-      // Sort safe sites by proximity to village
+    evaluatedVillages.forEach((village: any) => {
       const sortedSites = [...sites].sort((a, b) => {
         const dA = Math.hypot(a.lat - village.lat, a.lon - village.lon);
         const dB = Math.hypot(b.lat - village.lat, b.lon - village.lon);
@@ -133,7 +148,6 @@ export async function GET(request: Request) {
       let matchedSite = sortedSites[0];
       const pop = village.population;
 
-      // Check bottleneck constraint
       const remLand = matchedSite.max_land_capacity - matchedSite.used_land;
       const remWater = matchedSite.max_water_capacity - matchedSite.used_water;
       const remRoad = matchedSite.max_road_capacity - matchedSite.used_road;
@@ -145,14 +159,12 @@ export async function GET(request: Request) {
       else if (minRem === remWater) bottleneckType = 'WATER_LIMIT';
       else bottleneckType = 'LAND_LIMIT';
 
-      // Update used capacity
       matchedSite.used_land += pop;
       matchedSite.used_water += pop;
       matchedSite.used_road += pop;
 
-      // Find road route matching if available
       const road = roadNetworks.find(
-        (r) => r.from_village_id === village.habitation_id && r.to_site_id === matchedSite.site_id
+        (r: any) => r.from_village_id === village.habitation_id && r.to_site_id === matchedSite.site_id
       ) || {
         choke_point_lat: (village.lat + matchedSite.lat) / 2,
         choke_point_lon: (village.lon + matchedSite.lon) / 2,
@@ -183,14 +195,12 @@ export async function GET(request: Request) {
       });
     });
 
-    // Group into Triage Tiers
     const triageTiers = {
       tier1: allocations.filter((a) => a.tier === 'TIER_1'),
       tier2: allocations.filter((a) => a.tier === 'TIER_2'),
       tier3: allocations.filter((a) => a.tier === 'TIER_3'),
     };
 
-    // Calculate site utilization percentages
     const siteStatus = sites.map((s) => {
       const landPct = Math.round((s.used_land / s.max_land_capacity) * 100);
       const waterPct = Math.round((s.used_water / s.max_water_capacity) * 100);
@@ -214,6 +224,9 @@ export async function GET(request: Request) {
 
     return NextResponse.json({
       success: true,
+      cached: false,
+      db_status: 'ONLINE',
+      query_latency_ms: Math.round(performance.now() - startTime),
       parameters: { rainfall, slopeThreshold, historyWeight },
       triageTiers,
       allocations,

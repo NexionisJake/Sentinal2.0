@@ -289,7 +289,7 @@ export async function GET(request: Request) {
       doc.on('end', () => resolve(Buffer.concat(buffers)));
     });
 
-    return new Response(pdfBuffer, {
+    return new Response(pdfBuffer as any, {
       headers: {
         'Content-Type': 'application/pdf',
         'Content-Disposition': `attachment; filename="InclusiWeb_Relocation_ActionPlan_${new Date().toISOString().slice(0, 10)}.pdf"`,
