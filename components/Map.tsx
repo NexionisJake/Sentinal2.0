@@ -4,6 +4,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import DeckGL from '@deck.gl/react';
 import { GeoJsonLayer, ColumnLayer, PathLayer, ArcLayer, ScatterplotLayer } from '@deck.gl/layers';
 import { Map } from 'react-map-gl/maplibre';
+import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
 const INITIAL_VIEW_STATE = {
