@@ -147,7 +147,7 @@ export const AutopilotDemoControl: React.FC<AutopilotDemoProps> = ({ isActive, o
     return sec;
   };
 
-  // Run initial step setup whenever step index changes
+  // 1. Run initial step setup whenever step index changes
   useEffect(() => {
     if (!isActive) return;
     const step = DEMO_STEPS[currentStepIdx];
@@ -156,41 +156,38 @@ export const AutopilotDemoControl: React.FC<AutopilotDemoProps> = ({ isActive, o
     }
   }, [currentStepIdx, isActive]);
 
-  // Main ticker loop
+  // 2. Timer interval to increment elapsed time
   useEffect(() => {
-    if (!isActive || !isPlaying) {
-      if (timerRef.current) clearInterval(timerRef.current);
-      return;
-    }
+    if (!isActive || !isPlaying) return;
 
-    timerRef.current = setInterval(() => {
-      setElapsedSec((prev) => {
-        const next = prev + 0.5;
-        const currentStepStart = getStepStartSec(currentStepIdx);
-        const currentStepSec = next - currentStepStart;
-
-        // Check if tick callback exists for current step
-        if (DEMO_STEPS[currentStepIdx]?.tick) {
-          DEMO_STEPS[currentStepIdx].tick!(currentStepSec, actions);
-        }
-
-        // Check step transition
-        if (currentStepSec >= DEMO_STEPS[currentStepIdx].duration) {
-          if (currentStepIdx < DEMO_STEPS.length - 1) {
-            setCurrentStepIdx(currentStepIdx + 1);
-          } else {
-            // Reached end of demo
-            setIsPlaying(false);
-          }
-        }
-        return next;
-      });
+    const timer = setInterval(() => {
+      setElapsedSec((prev) => prev + 0.5);
     }, 500);
 
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [isActive, isPlaying, currentStepIdx]);
+    return () => clearInterval(timer);
+  }, [isActive, isPlaying]);
+
+  // 3. Handle step ticks and transitions cleanly outside state updater callbacks
+  useEffect(() => {
+    if (!isActive || !isPlaying) return;
+
+    const currentStepStart = getStepStartSec(currentStepIdx);
+    const currentStepSec = elapsedSec - currentStepStart;
+
+    // Execute step tick callback if present
+    if (DEMO_STEPS[currentStepIdx]?.tick) {
+      DEMO_STEPS[currentStepIdx].tick!(currentStepSec, actions);
+    }
+
+    // Step transition check
+    if (currentStepSec >= DEMO_STEPS[currentStepIdx].duration) {
+      if (currentStepIdx < DEMO_STEPS.length - 1) {
+        setCurrentStepIdx((idx) => idx + 1);
+      } else {
+        setIsPlaying(false);
+      }
+    }
+  }, [elapsedSec, isActive, isPlaying, currentStepIdx]);
 
   if (!isActive) return null;
 

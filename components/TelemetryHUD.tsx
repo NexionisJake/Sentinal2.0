@@ -109,7 +109,9 @@ export const TelemetryHUD: React.FC<TelemetryHUDProps> = ({
 
           <div>
             <div className="text-slate-500 text-[10px] uppercase font-semibold tracking-wider">ACTIVE PIXELS EVALUATED</div>
-            <div className="text-purple-300 font-bold text-sm">{activePixels.toLocaleString('en-US')} PTS</div>
+            <div className="text-purple-300 font-bold text-sm" suppressHydrationWarning>
+              {activePixels.toLocaleString('en-US')} PTS
+            </div>
             <div className="text-[10px] text-slate-500 truncate">GPU Shader Kernel</div>
           </div>
 
